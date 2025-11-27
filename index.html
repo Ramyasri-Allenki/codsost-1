@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Simple Movie Recommendation (Robust)</title>
+  <style>
+    :root { --bg:#f6f7fb; --card:#fff; --accent:#2b6cb0; --muted:#666; }
+    body{
+      font-family: Inter, system-ui, Arial; background:var(--bg); color:#222;
+      display:flex; align-items:flex-start; justify-content:center; padding:30px;
+    }
+    .app{
+      width:760px; max-width:95%; background:transparent;
+    }
+    header{ margin-bottom:12px; }
+    h1{ margin:0 0 6px 0; font-size:24px }
+    .ui{
+      display:flex; gap:12px; align-items:center; margin-bottom:14px;
+      flex-wrap:wrap;
+    }
+    input[type="text"]{
+      flex:1; padding:10px 12px; font-size:15px; border-radius:8px;
+      border:1px solid #d6d9e6; background:var(--card);
+    }
+    button{
+      padding:10px 14px; border-radius:8px; border:0; background:var(--accent);
+      color:white; font-weight:600; cursor:pointer;
+    }
+    .suggestions{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px;}
+    .suggestions button{ background:#fff; color:#333; border:1px solid #e2e6f0; padding:6px 10px; font-size:13px; }
+    #recommendations{ display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:12px; margin-top:14px; }
+    .movie{
+      background:var(--card); padding:12px; border-radius:10px; box-shadow:0 6px 14px rgba(20,20,60,0.05);
+      border:1px solid #edf0f7;
+    }
+    .movie h3{ margin:0 0 6px 0; font-size:16px }
+    .meta{ color:var(--muted); font-size:13px; margin-bottom:8px }
+    .score{ float:right; background:#eef7ff; color:var(--accent); padding:2px 7px; border-radius:999px; font-weight:700; font-size:12px; }
+    .hint{ color:var(--muted); margin-top:10px; font-size:13px }
+    .noresult{ color:#b00020; font-weight:600; }
+    footer{ margin-top:14px; color:var(--muted); font-size:13px }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>Movie Recommendation System</h1>
+      <div style="color:var(--muted)">Type a genre, keyword or movie name. Examples: <strong>Comedy</strong>, <strong>thrilling</strong>, <strong>romantic</strong></div>
+    </header>
+
+    <div class="ui">
+      <input id="userInput" type="text" placeholder="e.g. Comedy or mind bending" />
+      <button id="goBtn">Generate</button>
+      <button id="clearBtn" style="background:#e2e8f0;color:#111">Clear</button>
+    </div>
+
+    <div class="suggestions" id="suggestions"></div>
+
+    <div id="recommendations" aria-live="polite"></div>
+    <div class="hint">Tip: click a suggestion to auto-search. Check browser console for debug logs.</div>
+    <footer>Simple content-based filter — no server required.</footer>
+  </div>
+
+  <script>
+    // ---------- Dataset ----------
+    const movies = [
+      { name: "Inception", genre: "Sci-Fi", keywords: ["thrilling", "mind-bending", "dream"] },
+      { name: "Titanic", genre: "Romance", keywords: ["romantic", "drama", "historic"] },
+      { name: "The Dark Knight", genre: "Action", keywords: ["hero", "thrilling", "crime"] },
+      { name: "The Hangover", genre: "Comedy", keywords: ["funny", "party", "road-trip"] },
+      { name: "La La Land", genre: "Romance", keywords: ["romantic", "musical", "music"] },
+      { name: "Interstellar", genre: "Sci-Fi", keywords: ["space", "emotional", "epic"] },
+      { name: "Toy Story", genre: "Animation", keywords: ["family", "funny", "kids"] },
+      { name: "Parasite", genre: "Thriller", keywords: ["social", "dark", "suspense"] },
+      { name: "The Godfather", genre: "Crime", keywords: ["classic", "mafia", "drama"] },
+      { name: "Forrest Gump", genre: "Drama", keywords: ["emotional", "classic", "life"] }
+    ];
+
+    // ---------- UI elements ----------
+    const inputEl = document.getElementById('userInput');
+    const goBtn = document.getElementById('goBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const recDiv = document.getElementById('recommendations');
+    const suggestionsDiv = document.getElementById('suggestions');
+
+    // ---------- helper: normalize strings (remove punctuation, convert hyphens to spaces) ----------
+    function normalize(s){
+      if(!s) return '';
+      return s.toString()
+        .toLowerCase()
+        .replace(/[-_]/g, ' ')        // replace hyphen/underscore with space
+        .replace(/[^\w\s]/g, '')     // remove punctuation
+        .replace(/\s+/g, ' ')        // collapse multiple spaces
+        .trim();
+    }
+
+    // ---------- build suggestions from dataset (unique genres + keywords) ----------
+    function buildSuggestions(){
+      const set = new Set();
+      movies.forEach(m=>{
+        set.add(normalize(m.genre));
+        m.keywords.forEach(k => set.add(normalize(k)));
+      });
+      const arr = Array.from(set).slice(0,16);
+      suggestionsDiv.innerHTML = '';
+      arr.forEach(s=>{
+        const btn = document.createElement('button');
+        btn.textContent = s;
+        btn.addEventListener('click', ()=> {
+          inputEl.value = s;
+          doRecommend();
+        });
+        suggestionsDiv.appendChild(btn);
+      });
+    }
+
+    // ---------- recommendation logic ----------
+    function scoreMovie(movie, tokens){
+      // score based on matches in name, genre, keywords
+      let score = 0;
+      const name = normalize(movie.name);
+      const genre = normalize(movie.genre);
+      const kws = movie.keywords.map(k=>normalize(k));
+      for(const t of tokens){
+        if(!t) continue;
+        // exact token matches are stronger
+        if(t === genre) score += 4;
+        if(kws.includes(t)) score += 3;
+        // partial / substring matches are weaker
+        if(name.includes(t)) score += 2;
+        if(genre.includes(t) && genre !== t) score += 1;
+        for(const k of kws) if(k.includes(t) && k !== t) score += 1;
+      }
+      return score;
+    }
+
+    function doRecommend(){
+      const raw = inputEl.value || '';
+      const normalized = normalize(raw);
+      console.log('Search input raw:', raw, 'normalized:', normalized);
+      if(!normalized){
+        recDiv.innerHTML = '<div class="noresult">Please enter a genre or keyword to get recommendations.</div>';
+        return;
+      }
+      const tokens = normalized.split(' ').filter(Boolean);
+      // compute scores
+      const scored = movies.map(m => ({ m, score: scoreMovie(m, tokens) }))
+                         .filter(x => x.score > 0)
+                         .sort((a,b) => b.score - a.score || a.m.name.localeCompare(b.m.name));
+
+      // render
+      recDiv.innerHTML = '';
+      if(scored.length === 0){
+        recDiv.innerHTML = '<div class="noresult">No recommendations found. Try similar words (e.g., "sci fi" → "sci-fi", or shorter keywords like "thrilling").</div>';
+        return;
+      }
+      scored.forEach(item=>{
+        const card = document.createElement('div');
+        card.className = 'movie';
+        const title = document.createElement('h3');
+        title.textContent = item.m.name;
+        const scoreEl = document.createElement('span');
+        scoreEl.className = 'score';
+        scoreEl.textContent = item.score;
+        title.appendChild(scoreEl);
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        meta.textContent = item.m.genre + ' · ' + item.m.keywords.join(', ');
+        card.appendChild(title);
+        card.appendChild(meta);
+        recDiv.appendChild(card);
+      });
+    }
+
+    // ---------- wire buttons ----------
+    goBtn.addEventListener('click', doRecommend);
+    inputEl.addEventListener('keydown', (e)=> { if(e.key === 'Enter') doRecommend(); });
+    clearBtn.addEventListener('click', ()=> { inputEl.value=''; recDiv.innerHTML=''; inputEl.focus(); });
+
+    // ---------- init ----------
+    buildSuggestions();
+
+    // For convenience, pre-run with an example so user sees behavior:
+    // inputEl.value = 'thrilling'; // uncomment to auto-run on load
+  </script>
+</body>
+</html>
